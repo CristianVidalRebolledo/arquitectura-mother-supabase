@@ -1,81 +1,170 @@
 # Sistema Tenant — Documentación de Arquitectura
 
-## 1. Visión General (Nivel C4 — Contexto)
+## 1. Contexto General
 
-El sistema está construido sobre una arquitectura **multi-tenant**, donde cada empresa
-cliente es un `tenant` independiente. Los usuarios pertenecen a un tenant y tienen
-un rol que determina qué datos pueden ver y gestionar.
+El sistema es **multi-tenant**: cada empresa cliente es un `tenant` independiente.
+Los usuarios pertenecen a un tenant y tienen un rol que determina qué datos pueden ver.
 ```mermaid
-C4Context
-    title Sistema Tenant — Contexto General
+flowchart TD
+    subgraph Usuarios
+        U1[👤 Usuario]
+        U2[👔 Company Admin]
+        U3[🔐 Superadmin]
+    end
 
-    Person(user, "Usuario / Persona", "Miembro de una empresa")
-    Person(admin, "Company Admin", "Administrador de empresa")
-    Person(superadmin, "Superadmin", "Administrador de plataforma")
+    subgraph App
+        A1[📱 App Móvil]
+    end
 
-    System(app, "Aplicación Móvil", "Genera telemetría y datos biométricos")
-    System_Boundary(supabase, "Supabase / PostgreSQL") {
-        System(api, "REST API", "Expone datos vía RLS por rol")
-        System(db, "Base de Datos", "Almacena toda la información")
-        System(auth, "Auth", "Gestiona identidad y roles")
-    }
+    subgraph Supabase
+        API[🌐 REST API]
+        AUTH[🔑 Auth & RLS]
+        DB[💾 Base de Datos]
+    end
 
-    Rel(user, app, "Usa")
-    Rel(app, api, "Envía telemetría")
-    Rel(admin, api, "Gestiona su tenant")
-    Rel(superadmin, api, "Gestiona toda la plataforma")
-    Rel(api, db, "Lee / Escribe")
-    Rel(auth, api, "Valida tokens y roles")
+    U1 --> A1
+    U2 --> API
+    U3 --> API
+    A1 --> API
+    API --> AUTH
+    AUTH --> DB
 ```
 
 ---
 
-## 2. Jerarquía Organizacional (Nivel C4 — Contenedor)
+## 2. Jerarquía Organizacional
 
-Cada tenant representa una empresa. Dentro de ella existe una jerarquía de
-**departamento → equipo → célula → persona**.
+Dentro de cada tenant existe una jerarquía de cuatro niveles.
+`tenant_memberships` es la tabla pivote que une a una persona con toda la jerarquía.
 ```mermaid
-C4Container
-    title Jerarquía Organizacional del Tenant
+flowchart TD
+    subgraph Tenant 🏢
+        T[🏢 tenants]
+        CD[🏛️ company_departments]
+        TM[👥 teams]
+        C[🔬 cells]
+        MEM[👤 tenant_memberships]
+    end
 
-    System_Boundary(tenant, "Tenant (Empresa)") {
-        Container(t, "tenants", "Tabla", "Empresa cliente raíz del sistema")
-        Container(cd, "company_departments", "Tabla", "Departamentos o gerencias de la empresa")
-        Container(tm, "teams", "Tabla", "Equipos dentro de un departamento")
-        Container(c, "cells", "Tabla", "Células dentro de un equipo")
-        Container(mem, "tenant_memberships", "Tabla", "Vincula personas a la jerarquía completa")
-    }
-
-    Rel(t, cd, "tiene")
-    Rel(cd, tm, "tiene")
-    Rel(tm, c, "tiene")
-    Rel(mem, t, "pertenece a")
-    Rel(mem, cd, "asignado a")
-    Rel(mem, tm, "asignado a")
-    Rel(mem, c, "asignado a")
+    T --> CD
+    CD --> TM
+    TM --> C
+    MEM --> T
+    MEM --> CD
+    MEM --> TM
+    MEM --> C
 ```
 
 ---
 
-## 3. Tablas del Sistema Tenant
+## 3. Roles y Permisos
+```mermaid
+flowchart LR
+    subgraph Roles
+        SR[⚙️ service_role]
+        SA[🔐 superadmin]
+        CA[👔 company_admin]
+        TA[🗂️ team_admin]
+        CO[🏋️ coach]
+        US[👤 user]
+    end
 
-### 3.1 `tenants`
-Tabla raíz. Cada fila representa una empresa cliente independiente.
-Casi todas las tablas del sistema tienen `tenant_id` como foreign key hacia esta tabla.
+    SR -. bypass RLS .-> SA
+    SA --> CA
+    CA --> TA
+    TA --> CO
+    CO --> US
+```
+
+| Rol | Alcance | Acción |
+|-----|---------|--------|
+| `superadmin` | Toda la plataforma | Gestiona todo |
+| `company_admin` | Su tenant | Gestiona depto, equipos, células |
+| `team_admin` | Su equipo | Gestiona miembros |
+| `coach` | Su equipo | Solo lectura de salud |
+| `user` | Sus datos | Sus propios registros |
+| `service_role` | Todo | Bypass RLS — solo backend |
+
+---
+
+## 4. Flujo de Datos de Telemetría
+```mermaid
+flowchart LR
+    subgraph Origen
+        APP[📱 App Móvil]
+    end
+
+    subgraph Legacy 🟠
+        AHB[🍎 apple_health_body]
+        DA[🏃 daily_activity]
+        CS[📊 calculated_scores]
+        HV[📐 hard_variables]
+        MM[🦵 mobility_metrics]
+        SS[🧠 smart_score]
+    end
+
+    subgraph Tenant Principal 🟢
+        BIO[📡 biometrics_timeseries]
+        BM[📏 body_measurements]
+        MED[🩺 medical_records]
+        MR[📈 metric_records]
+    end
+
+    APP --> AHB
+    APP --> DA
+    APP --> CS
+    APP --> BIO
+    APP --> MED
+```
+
+---
+
+## 5. Estado Actual de los Datos
+```mermaid
+flowchart TD
+    subgraph Sistema Legacy 🟠 activo
+        AHB[🍎 apple_health_body 14]
+        DA[🏃 daily_activity 261]
+        CS[📊 calculated_scores 1109]
+    end
+
+    subgraph Sistema Tenant 🔵 vacío
+        BIO[📡 biometrics_timeseries 0]
+        BM[📏 body_measurements 0]
+        MED[🩺 medical_records 0]
+        MR[📈 metric_records 0]
+    end
+
+    subgraph DW Pipeline
+        BR[🥉 Bronze]
+        SI[🥈 Silver]
+        GO[🥇 Gold]
+    end
+
+    AHB --> BR
+    DA --> BR
+    CS --> BR
+    BR --> SI
+    SI --> GO
+```
+
+---
+
+## 6. Tablas del Sistema Tenant
+
+### 6.1 `tenants` 🏢
+Tabla raíz. Cada fila es una empresa cliente independiente.
+Casi todas las tablas tienen `tenant_id` como foreign key hacia aquí.
 
 | Campo | Tipo | Descripción |
 |-------|------|-------------|
-| `id` | uuid | Identificador único del tenant |
+| `id` | uuid | Identificador único |
 | `name` | text | Nombre de la empresa |
-
-**Políticas RLS:**
-- Solo miembros del tenant pueden ver su propio tenant
-- `service_role` tiene acceso total
 
 ---
 
-### 3.2 `company_departments`
-Representa las gerencias o departamentos dentro de una empresa.
+### 6.2 `company_departments` 🏛️
+Gerencias o departamentos dentro de una empresa.
 
 | Campo | Tipo | Descripción |
 |-------|------|-------------|
@@ -83,13 +172,9 @@ Representa las gerencias o departamentos dentro de una empresa.
 | `tenant_id` | uuid | FK → tenants |
 | `name` | text | Nombre del departamento |
 
-**Políticas RLS:**
-- Cualquier miembro del tenant puede **ver** sus departamentos
-- Solo `company_admin` y `superadmin` pueden **gestionar**
-
 ---
 
-### 3.3 `teams`
+### 6.3 `teams` 👥
 Equipos dentro de un departamento.
 
 | Campo | Tipo | Descripción |
@@ -98,13 +183,9 @@ Equipos dentro de un departamento.
 | `tenant_id` | uuid | FK → tenants |
 | `department_id` | uuid | FK → company_departments |
 
-**Políticas RLS:**
-- Cualquier miembro del tenant puede **ver** los equipos
-- Solo `company_admin` y `superadmin` pueden **gestionar**
-
 ---
 
-### 3.4 `cells`
+### 6.4 `cells` 🔬
 Subdivisiones dentro de un equipo.
 
 | Campo | Tipo | Descripción |
@@ -112,16 +193,10 @@ Subdivisiones dentro de un equipo.
 | `id` | uuid | Identificador único |
 | `team_id` | uuid | FK → teams |
 
-**Políticas RLS:**
-- Cualquier miembro del tenant puede **ver** las células
-- Solo `company_admin` y `superadmin` pueden **gestionar**
-
 ---
 
-### 3.5 `tenant_memberships`
-Tabla pivote clave. Vincula a un usuario con todos los niveles de la jerarquía
-simultáneamente. Es el punto de entrada para resolver a qué empresa, departamento,
-equipo y célula pertenece una persona.
+### 6.5 `tenant_memberships` 👤
+Tabla pivote. Vincula a un usuario con todos los niveles de la jerarquía.
 
 | Campo | Tipo | Descripción |
 |-------|------|-------------|
@@ -133,63 +208,16 @@ equipo y célula pertenece una persona.
 | `user_id` | uuid | FK → auth.users |
 | `role` | app_role | Rol del usuario en este tenant |
 
-**Políticas RLS:**
-- El usuario ve solo su propia membresía
-- `company_admin` ve todas las membresías de su tenant
-- `superadmin` ve todo
-
 ---
 
-## 4. Roles del Sistema
-```mermaid
-graph TD
-    SA[superadmin\nVe y gestiona toda la plataforma]
-    CA[company_admin\nGestiona su tenant completo]
-    TA[team_admin\nGestiona su equipo]
-    CO[coach\nVe datos de salud de su equipo]
-    US[user\nVe solo sus propios datos]
-    SR[service_role\nAcceso total - solo backend]
+## 7. Notas y Deuda Técnica
 
-    SA --> CA --> TA --> CO --> US
-    SR -. bypass RLS .-> SA
-```
+> ⚠️ **Sistema dual:** Existen dos jerarquías paralelas. El sistema `ios / organizations`
+> (legacy) concentra todos los datos actuales. El sistema `tenants` está diseñado pero vacío.
+> Confirmar con el equipo si habrá migración.
 
-| Rol | Alcance | Puede gestionar |
-|-----|---------|-----------------|
-| `superadmin` | Toda la plataforma | Todo |
-| `company_admin` | Su tenant | Departamentos, equipos, células, miembros |
-| `team_admin` | Su equipo | Miembros del equipo |
-| `coach` | Su equipo | Solo lectura de datos de salud |
-| `user` | Solo sus datos | Sus propios registros |
-| `service_role` | Todo (bypass RLS) | Procesos backend / ETL |
+> ⚠️ **Reports con `user_id NULL`:** Cualquier miembro del tenant puede ver reportes sin
+> dueño asignado. Revisar si es intencional.
 
----
-
-## 5. Flujo de Datos de Telemetría
-```mermaid
-flowchart LR
-    APP(App Móvil) -->|telemetría| BIO(biometrics_timeseries)
-    APP -->|métricas| MR(metric_records)
-    APP -->|registros médicos| MED(medical_records)
-
-    BIO --> DEV(devices)
-    MR --> MD(metric_definitions)
-    MED --> OBS(observations)
-    MED --> MF(medical_files)
-
-    BIO & MR & MED -->|tenant_id| T(tenants)
-```
-
----
-
-## 6. Notas y Deuda Técnica
-
-> ⚠️ **Sistema dual:** Existen dos jerarquías paralelas en la base de datos.
-> El sistema `ios_teams / organizations` (legacy) y el sistema `tenants / company_departments`
-> (principal). Antes de escalar la reportería conviene confirmar si se van a unificar.
-
-> ⚠️ **Reports con `user_id NULL`:** Cualquier miembro del tenant puede ver reportes
-> sin dueño asignado. Revisar si esto es intencional.
-
-> ✅ **`service_role` para ETL:** El pipeline Bronze → Silver → Gold debe usar
-> exclusivamente la `service_role key` para bypasear RLS y acceder a todos los datos.
+> ✅ **ETL hacia el DW:** Usar exclusivamente `service_role key` para bypasear RLS
+> y acceder a todos los datos en el pipeline Bronze → Silver → Gold.
